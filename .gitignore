@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Config files with secrets
+backend/config/siliconflow.json
+backend/config/xunfei.json
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/

@@ -1,0 +1,6 @@
+{
+  "baseUrl": "https://api.siliconflow.cn/v1",
+  "apiKey": "sk-tomaiyhwyxzbyqggzxolrvyncbimsnybadvgptajczmpaoip",
+  "model": "deepseek-ai/DeepSeek-V4-Flash"
+}
+
