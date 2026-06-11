@@ -160,9 +160,12 @@
       </div>
     </div>
 
-    <div v-if="showTemplateModal" class="modal-overlay" @click.self="showTemplateModal = false">
-      <div class="modal-content">
+    <div v-if="showTemplateModal" class="modal-overlay template-modal-overlay" @click.self="showTemplateModal = false">
+      <div class="template-modal-wrapper">
         <TemplateLibrary @select-template="handleSelectTemplate" />
+        <button class="template-modal-close" @click="showTemplateModal = false" title="关闭">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
     </div>
   </div>
@@ -213,7 +216,7 @@ const navTabs = [
   { id: 'toolbox', icon: '🧰', label: '工具箱' },
 ];
 
-function handleResult(data: { resumeId: number; sections: Section[]; suggestions: SuggestionsResponse; styleType: string; targetJob: string; images?: string[] }) {
+function handleResult(data: { resumeId: number; sections: Section[]; suggestions: SuggestionsResponse | null; styleType: string; targetJob: string; images?: string[] }) {
   resumeId.value = data.resumeId;
   sections.value = data.sections;
   suggestions.value = data.suggestions;
@@ -1089,6 +1092,43 @@ body {
   max-height: 80vh;
   overflow-y: auto;
   border-radius: var(--radius-xl);
+}
+
+.template-modal-overlay {
+  z-index: 1001;
+}
+
+.template-modal-wrapper {
+  position: relative;
+  width: 96vw;
+  height: 92vh;
+  max-width: 1400px;
+  animation: fade-in 0.3s ease;
+}
+
+.template-modal-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 10;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  color: var(--white);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.template-modal-close:hover {
+  background: rgba(239, 68, 68, 0.6);
+  border-color: rgba(239, 68, 68, 0.4);
+  transform: scale(1.1);
 }
 
 .app-error-overlay {

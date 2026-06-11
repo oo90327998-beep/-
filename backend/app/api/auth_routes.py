@@ -11,9 +11,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Response, Request, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, field_validator
-from sqlalchemy.ext.asyncio import AsyncSession
+from supabase import AsyncClient
 
-from app.db.database import get_db
+from app.db.database import get_supabase
 from app.db.repo import ResumeRepo, User
 
 
@@ -170,7 +170,7 @@ def create_csrf_token() -> str:
 async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncClient = Depends(get_supabase),
 ) -> User:
     token = None
 
@@ -196,7 +196,7 @@ async def get_current_user(
 
 
 @router.post("/register", response_model=TokenResponse)
-async def register(user_data: UserRegister, response: Response, db: AsyncSession = Depends(get_db)):
+async def register(user_data: UserRegister, response: Response, db: AsyncClient = Depends(get_supabase)):
     repo = ResumeRepo(db)
 
     existing_user = await repo.get_user_by_username(user_data.username)
@@ -258,7 +258,7 @@ async def register(user_data: UserRegister, response: Response, db: AsyncSession
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(user_data: UserLogin, response: Response, db: AsyncSession = Depends(get_db)):
+async def login(user_data: UserLogin, response: Response, db: AsyncClient = Depends(get_supabase)):
     repo = ResumeRepo(db)
 
     user = await repo.get_user_by_username(user_data.username)
@@ -328,7 +328,7 @@ async def get_current_user_info(current_user: User = Depends(get_current_user)):
 
 
 @router.get("/check", response_model=dict)
-async def check_auth(request: Request, db: AsyncSession = Depends(get_db)):
+async def check_auth(request: Request, db: AsyncClient = Depends(get_supabase)):
     token = request.cookies.get("access_token")
 
     if not token:

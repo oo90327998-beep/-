@@ -82,7 +82,12 @@
       </div>
       <div class="banner-content">
         <div class="banner-label">AI 分析总结</div>
-        <div class="banner-text">{{ suggestions?.overall_summary || '暂无总结' }}</div>
+        <div v-if="suggestionsLoading" class="banner-text banner-loading">AI 正在分析简历...</div>
+        <div v-else-if="suggestionsError" class="banner-text banner-error">
+          {{ suggestionsError }}
+          <button class="retry-link" @click="fetchSuggestions">重试</button>
+        </div>
+        <div v-else class="banner-text">{{ effectiveSuggestions?.overall_summary || '暂无总结' }}</div>
       </div>
     </div>
 
@@ -351,7 +356,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
 import html2pdf from 'html2pdf.js';
-import { getStyles, transformStyle } from '../api/client';
+import { getStyles, transformStyle, generateSuggestions } from '../api/client';
 import { toast } from '../composables/useToast';
 import type { Section, SuggestionsResponse, SuggestionsItem, StyleInfo } from '../types';
 
@@ -379,12 +384,37 @@ const styles = ref<Record<string, StyleInfo>>({});
 const activeStyleId = ref('');
 const styleSwitching = ref(false);
 
+const localSuggestions = ref<SuggestionsResponse | null>(null);
+const suggestionsLoading = ref(false);
+const suggestionsError = ref('');
+
 onMounted(async () => {
   try {
     styles.value = await getStyles();
     activeStyleId.value = props.selectedTemplate || 'minimal-clean';
   } catch { /* styles unavailable */ }
+
+  // Auto-generate suggestions if missing
+  if (props.resumeId && (!props.suggestions || !props.suggestions.items?.length)) {
+    await fetchSuggestions();
+  } else {
+    localSuggestions.value = props.suggestions;
+  }
 });
+
+async function fetchSuggestions() {
+  if (!props.resumeId || suggestionsLoading.value) return;
+  suggestionsLoading.value = true;
+  suggestionsError.value = '';
+  try {
+    const result = await generateSuggestions(props.resumeId);
+    localSuggestions.value = result;
+  } catch (e: any) {
+    suggestionsError.value = e?.message || '建议生成失败，请稍后重试';
+  } finally {
+    suggestionsLoading.value = false;
+  }
+}
 
 async function handleStyleSwitch() {
   if (!props.resumeId || !activeStyleId.value) return;
@@ -410,26 +440,28 @@ watch(() => props.sections, (newSections) => {
 
 const currentSection = computed(() => editedSections.value[activeSection.value]);
 
+const effectiveSuggestions = computed(() => localSuggestions.value ?? props.suggestions);
+
 const currentSuggestion = computed(() => {
-  if (!props.suggestions?.items) return null;
+  if (!effectiveSuggestions.value?.items) return null;
   const section = currentSection.value;
   if (!section) return null;
-  
+
   // 只按名称匹配，不匹配时返回null，避免错位
-  const matched = props.suggestions.items.find(item => item.name === section.name);
+  const matched = effectiveSuggestions.value.items.find(item => item.name === section.name);
   return matched || null;
 });
 
 const totalIssues = computed(() => {
-  return props.suggestions?.items?.reduce((sum, item) => sum + (item.issues?.length || 0), 0) || 0;
+  return effectiveSuggestions.value?.items?.reduce((sum, item) => sum + (item.issues?.length || 0), 0) || 0;
 });
 
 const totalSuggestions = computed(() => {
-  return props.suggestions?.items?.reduce((sum, item) => sum + (item.recommendations?.length || 0), 0) || 0;
+  return effectiveSuggestions.value?.items?.reduce((sum, item) => sum + (item.recommendations?.length || 0), 0) || 0;
 });
 
 const sectionsWithRewrite = computed(() => {
-  return props.suggestions?.items?.filter(item => item.rewrite_example)?.length || 0;
+  return effectiveSuggestions.value?.items?.filter(item => item.rewrite_example)?.length || 0;
 });
 
 const selectedTemplate = computed(() => props.selectedTemplate || 'minimal-clean');
@@ -443,24 +475,22 @@ const avatarImage = computed(() => {
 
 const templateDisplayName = computed(() => {
   const names: Record<string, string> = {
-    'executive': '高管专业版',
-    'modern-tech': '现代科技',
-    'creative-design': '创意流程',
-    'minimal-clean': '极简清新',
-    'elegant': '优雅经典',
-    'startup': '创业先锋',
-    'modern-minimal': '现代简约'
+    'executive': '深蓝专业',
+    'modern-tech': '科技蓝调',
+    'creative-design': '创意工坊',
+    'minimal-clean': '极简瑞士',
+    'elegant': '温暖经典',
+    'modern-minimal': '紫韵现代'
   };
-  return names[selectedTemplate.value] || '极简清新';
+  return names[selectedTemplate.value] || '极简瑞士';
 });
 
 const templateAccentColors: Record<string, string> = {
-  'executive': '#1e3a5f',
-  'modern-tech': '#0369a1',
-  'creative-design': '#86198f',
-  'minimal-clean': '#374151',
-  'elegant': '#92400e',
-  'startup': '#047857',
+  'executive': '#1a2744',
+  'modern-tech': '#2563eb',
+  'creative-design': '#7c3aed',
+  'minimal-clean': '#111111',
+  'elegant': '#b45309',
   'modern-minimal': '#7c3aed'
 };
 
@@ -500,8 +530,8 @@ const printSections = computed(() => {
   const sectionsToUse = filteredSections.length > 0 ? filteredSections : editedSections.value;
   
   return sectionsToUse.map(section => {
-    if (printOptimized.value && props.suggestions) {
-      const item = props.suggestions.items?.find(i => i.name === section.name);
+    if (printOptimized.value && effectiveSuggestions.value) {
+      const item = effectiveSuggestions.value.items?.find(i => i.name === section.name);
       if (item?.rewrite_example) {
         return { ...section, content: item.rewrite_example };
       }
@@ -552,11 +582,11 @@ function applyRewrite() {
 }
 
 function getSuggestionForSection(idx: number): SuggestionsItem | null {
-  if (!props.suggestions?.items) return null;
+  if (!effectiveSuggestions.value?.items) return null;
   const section = editedSections.value[idx];
   if (!section) return null;
   // 只按名称匹配，不匹配时返回null，避免错位
-  return props.suggestions.items.find(item => item.name === section.name) || null;
+  return effectiveSuggestions.value.items.find(item => item.name === section.name) || null;
 }
 
 async function copyOriginal() {
@@ -627,292 +657,158 @@ function escHtml(text: string): string {
 }
 
 function getFullTemplateHtml(templateId: string, sections: Section[], basicInfoData: { name: string; contact: string }, avatarUrl: string | null): string {
-  const accentColor = templateAccentColors[templateId] || '#374151';
+  const accentColor = templateAccentColors[templateId] || '#111111';
   const name = escHtml(basicInfoData.name || '姓名');
   const contact = escHtml(basicInfoData.contact || '');
-  
-  // 获取基本信息模块
-  const basicSection = sections.find(s => /^基本|^个人|^联系|^信息/i.test(s.name));
-  
-  // 过滤掉基本信息模块，其余模块按原始顺序显示
+
   const displaySections = sections.filter(s => !(/^基本|^个人|^联系|^信息/i.test(s.name)));
-  
-  const avatarHtml = avatarUrl 
+
+  const avatarHtml = avatarUrl
     ? `<img src="${avatarUrl}" alt="证件照" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />`
     : `<svg viewBox="0 0 100 100" style="width:100%;height:100%;">
         <circle cx="50" cy="35" r="25" fill="#f5d0c5"/>
-        <ellipse cx="50" cy="90" rx="35" ry="25" fill="#374151"/>
+        <ellipse cx="50" cy="90" rx="35" ry="25" fill="${accentColor}"/>
         <rect x="35" y="55" width="30" height="20" fill="#ffffff" rx="2"/>
         <path d="M 40 75 L 50 85 L 60 75" fill="#dc2626"/>
         <circle cx="42" cy="32" r="3" fill="#1f2937"/>
         <circle cx="58" cy="32" r="3" fill="#1f2937"/>
       </svg>`;
-  
+
   const contactParts = contact.split('|').map(p => p.trim()).filter(p => p);
-  
+  const sectionHtml = displaySections.map(s => {
+    const title = escHtml(s.name);
+    const text = escHtml(s.content || '');
+    return { title, text };
+  });
+
   if (templateId === 'creative-design') {
-    return `
-      <div class="resume-template creative">
-        <div class="resume-banner" style="background: linear-gradient(135deg, ${accentColor}, #ec4899);">
-          <div class="banner-content">
-            <div class="banner-left">
-              <h1 class="banner-title-cn">个人简历</h1>
-              <p class="banner-title-en">Personal Resume</p>
-              <p class="banner-slogan">${name}</p>
-              <div class="banner-icons">
-                <span class="icon-gold">🎨</span>
-                <span class="icon-gold">✨</span>
-              </div>
-            </div>
-            <div class="banner-right">
-              <div class="avatar-circle">${avatarHtml}</div>
-            </div>
-          </div>
-          <div class="banner-accent"></div>
+    return `<div class="r r-creative">
+<div class="r-creative-banner" style="background: linear-gradient(135deg, ${accentColor}, #ec4899);">
+  <div class="r-creative-banner-l">
+    <h1>${name}</h1>
+    <div class="r-creative-title">个人简历</div>
+  </div>
+</div>
+<div class="r-creative-body">
+  <div class="r-creative-grid">
+    <div class="r-creative-main">
+      ${sectionHtml.map(s => `
+      <section>
+        <div class="r-creative-block">${s.title}</div>
+        <div class="r-creative-work">
+          <p style="white-space: pre-wrap; font-size: 13px; color: #4b5563; line-height: 1.8; margin: 0;">${s.text}</p>
         </div>
-        <div class="resume-body-modern">
-          <section class="resume-section-modern">
-            <div class="section-block" style="background: linear-gradient(135deg, ${accentColor}, #ec4899);">
-              <span class="block-pattern"></span>
-              <h3>关于我</h3>
-            </div>
-            <div class="section-grid">
-              ${contactParts.map(p => `<div class="grid-item"><span class="value">${p}</span></div>`).join('')}
-            </div>
-          </section>
-          ${displaySections.map(section => `
-          <section class="resume-section-modern">
-            <div class="section-block" style="background: linear-gradient(135deg, ${accentColor}, #ec4899);">
-              <span class="block-pattern"></span>
-              <h3>${escHtml(section.name)}</h3>
-            </div>
-            <div class="work-item-modern">
-              <p class="work-detail-text" style="white-space: pre-wrap;">${escHtml(section.content || '')}</p>
-            </div>
-          </section>
-          `).join('')}
-        </div>
-      </div>
-    `;
-  }
-  
-  if (templateId === 'elegant') {
-    return `
-      <div class="resume-template elegant">
-        <div class="resume-banner" style="background: linear-gradient(135deg, ${accentColor}, #d97706);">
-          <div class="banner-content">
-            <div class="banner-left">
-              <h1 class="banner-title-cn">个人简历</h1>
-              <p class="banner-title-en">Personal Resume</p>
-              <p class="banner-slogan">${name}</p>
-              <div class="banner-icons">
-                <span class="icon-gold">👔</span>
-                <span class="icon-gold">📊</span>
-              </div>
-            </div>
-            <div class="banner-right">
-              <div class="avatar-circle">${avatarHtml}</div>
-            </div>
-          </div>
-          <div class="banner-accent"></div>
-        </div>
-        <div class="resume-body-modern">
-          <section class="resume-section-modern">
-            <div class="section-block" style="background: ${accentColor};">
-              <span class="block-pattern"></span>
-              <h3>基本信息</h3>
-            </div>
-            <div class="section-grid">
-              ${contactParts.map(p => `<div class="grid-item"><span class="value">${p}</span></div>`).join('')}
-            </div>
-          </section>
-          ${displaySections.map(section => `
-          <section class="resume-section-modern">
-            <div class="section-block" style="background: ${accentColor};">
-              <span class="block-pattern"></span>
-              <h3>${escHtml(section.name)}</h3>
-            </div>
-            <div class="work-item-modern">
-              <p class="work-detail-text" style="white-space: pre-wrap;">${escHtml(section.content || '')}</p>
-            </div>
-          </section>
-          `).join('')}
-        </div>
-      </div>
-    `;
-  }
-  
-  if (templateId === 'modern-minimal') {
-    return `
-      <div class="resume-template modern-minimal">
-        <div class="resume-banner" style="background: linear-gradient(135deg, ${accentColor}, #a78bfa);">
-          <div class="banner-content">
-            <div class="banner-left">
-              <h1 class="banner-title-cn">个人简历</h1>
-              <p class="banner-title-en">Personal Resume</p>
-              <p class="banner-slogan">${name}</p>
-              <div class="banner-icons">
-                <span class="icon-gold">🌿</span>
-                <span class="icon-gold">✉️</span>
-              </div>
-            </div>
-            <div class="banner-right">
-              <div class="avatar-circle">${avatarHtml}</div>
-            </div>
-          </div>
-          <div class="banner-accent"></div>
-        </div>
-        <div class="resume-body-modern">
-          <section class="resume-section-modern">
-            <div class="section-block" style="background: ${accentColor};">
-              <span class="block-pattern"></span>
-              <h3>基本信息</h3>
-            </div>
-            <div class="section-grid">
-              ${contactParts.map(p => `<div class="grid-item"><span class="value">${p}</span></div>`).join('')}
-            </div>
-          </section>
-          ${displaySections.map(section => `
-          <section class="resume-section-modern">
-            <div class="section-block" style="background: ${accentColor};">
-              <span class="block-pattern"></span>
-              <h3>${escHtml(section.name)}</h3>
-            </div>
-            <div class="work-item-modern">
-              <p class="work-detail-text" style="white-space: pre-wrap;">${escHtml(section.content || '')}</p>
-            </div>
-          </section>
-          `).join('')}
-        </div>
-      </div>
-    `;
-  }
-  
-  if (templateId === 'startup') {
-    return `
-      <div class="resume-template startup-a4">
-        <div class="startup-header">
-          <div class="startup-header-content">
-            <div class="startup-left">
-              <h1 class="startup-name">${name}</h1>
-              <p class="startup-intention">
-                ${contactParts.map((p, i) => `<span>${p}</span>${i < contactParts.length - 1 ? '<span class="startup-pipe">|</span>' : ''}`).join('')}
-              </p>
-            </div>
-            <div class="startup-right">
-              <div class="startup-avatar">${avatarHtml}</div>
-            </div>
-          </div>
-        </div>
-        <div class="startup-body">
-          ${displaySections.map(section => `
-          <section class="startup-section">
-            <h2 class="startup-section-title">${escHtml(section.name)}</h2>
-            <div class="startup-divider"></div>
-            <div class="startup-entry">
-              <div class="startup-entry-detail">
-                <p class="startup-detail-text" style="white-space: pre-wrap;">${escHtml(section.content || '')}</p>
-              </div>
-            </div>
-          </section>
-          `).join('')}
-        </div>
-      </div>
-    `;
-  }
-  
-  if (templateId === 'executive') {
-    return `
-      <div class="resume-template executive-pro">
-        <div class="resume-header-pro">
-          <div class="header-left">
-            <h1 class="name-title">${name}</h1>
-            <div class="info-lines">
-              ${contactParts.map(p => `<p class="info-line">${p}</p>`).join('')}
-            </div>
-          </div>
-          <div class="header-right">
-            <div class="avatar-pro">${avatarHtml}</div>
-          </div>
-        </div>
-        <div class="resume-body-pro">
-          ${displaySections.map(section => `
-          <section class="section-pro">
-            <div class="section-banner" style="background: ${accentColor};">
-              <h3>${escHtml(section.name)}</h3>
-            </div>
-            <div class="section-content">
-              <div class="entry-item">
-                <div class="entry-details">
-                  <p class="detail-line" style="white-space: pre-wrap;">${escHtml(section.content || '')}</p>
-                </div>
-              </div>
-            </div>
-          </section>
-          `).join('')}
-        </div>
-      </div>
-    `;
-  }
-  
-  if (templateId === 'modern-tech') {
-    return `
-      <div class="resume-template tech-a4">
-        <div class="tech-header">
-          <div class="tech-header-main">
-            <h1 class="tech-name">${name}</h1>
-            <div class="tech-info-block">
-              ${contactParts.map(p => `<p class="tech-info-line">${p}</p>`).join('')}
-            </div>
-          </div>
-          <div class="tech-avatar">${avatarHtml}</div>
-        </div>
-        <div class="tech-body">
-          ${displaySections.map(section => `
-          <section class="tech-section">
-            <div class="tech-banner" style="background: ${accentColor};">
-              <h3>${escHtml(section.name)}</h3>
-            </div>
-            <div class="tech-content">
-              <div class="tech-entry">
-                <div class="tech-entry-detail">
-                  <p class="tech-detail-text" style="white-space: pre-wrap;">${escHtml(section.content || '')}</p>
-                </div>
-              </div>
-            </div>
-          </section>
-          `).join('')}
-        </div>
-      </div>
-    `;
-  }
-  
-  return `
-    <div class="resume-template minimal-a4">
-      <div class="minimal-header">
-        <div class="minimal-header-content">
-          <h1 class="minimal-name">${name}</h1>
-          <div class="minimal-info-lines">
-            ${contactParts.map(p => `<p class="minimal-info-row">${p}</p>`).join('')}
-          </div>
-        </div>
-        <div class="minimal-avatar">${avatarHtml}</div>
-      </div>
-      <div class="minimal-body">
-        ${displaySections.map(section => `
-        <section class="minimal-section">
-          <h2 class="minimal-section-title">${escHtml(section.name)}</h2>
-          <div class="minimal-divider"></div>
-          <div class="minimal-entry">
-            <div class="minimal-entry-detail">
-              <p class="minimal-detail-text" style="white-space: pre-wrap;">${escHtml(section.content || '')}</p>
-            </div>
-          </div>
-        </section>
-        `).join('')}
-      </div>
+      </section>`).join('')}
     </div>
-  `;
+    <div class="r-creative-side">
+      <section>
+        <div class="r-creative-block">联系方式</div>
+        <div class="r-creative-contact-list">
+          ${contactParts.map(p => `<div>${p}</div>`).join('')}
+        </div>
+      </section>
+    </div>
+  </div>
+</div></div>`;
+  }
+
+  if (templateId === 'elegant') {
+    return `<div class="r r-elegant">
+<div class="r-elegant-head">
+  <h1>${name}</h1>
+  <div class="r-elegant-contact">
+    ${contactParts.map(p => `<span>${p}</span>`).join('<span class="r-elegant-sep">|</span>')}
+  </div>
+</div>
+<div class="r-elegant-body">
+  ${sectionHtml.map(s => `
+  <section>
+    <h2>${s.title}</h2>
+    <div class="r-elegant-entry">
+      <p style="white-space: pre-wrap; font-size: 13px; color: #57534e; line-height: 1.8; margin: 0;">${s.text}</p>
+    </div>
+  </section>`).join('')}
+</div></div>`;
+  }
+
+  if (templateId === 'modern-minimal') {
+    return `<div class="r r-modern">
+<div class="r-modern-banner" style="background: linear-gradient(135deg, ${accentColor}, #a78bfa);">
+  <div class="r-modern-banner-l">
+    <h1>${name}</h1>
+    <div class="r-modern-slogan">个人简历</div>
+  </div>
+</div>
+<div class="r-modern-body">
+  ${sectionHtml.map(s => `
+  <section>
+    <div class="r-modern-block"><span></span>${s.title}</div>
+    <p style="white-space: pre-wrap; font-size: 13px; color: #4b5563; line-height: 1.8; margin: 0 0 16px;">${s.text}</p>
+  </section>`).join('')}
+</div></div>`;
+  }
+
+  if (templateId === 'executive') {
+    return `<div class="r r-exec">
+<div class="r-exec-head">
+  <div class="r-exec-head-l">
+    <h1>${name}</h1>
+    <div class="r-exec-meta">
+      ${contactParts.map(p => `<span>${p}</span>`).join('<span class="r-exec-sep">|</span>')}
+    </div>
+  </div>
+  <div class="r-exec-head-r">
+    <div class="r-exec-avatar">${avatarHtml}</div>
+  </div>
+</div>
+<div class="r-exec-body">
+  ${sectionHtml.map(s => `
+  <section>
+    <div class="r-exec-banner">${s.title}</div>
+    <div class="r-exec-entry">
+      <p class="r-exec-p" style="white-space: pre-wrap;">${s.text}</p>
+    </div>
+  </section>`).join('')}
+</div></div>`;
+  }
+
+  if (templateId === 'modern-tech') {
+    return `<div class="r r-tech">
+<div class="r-tech-head">
+  <div class="r-tech-head-l">
+    <h1>${name}</h1>
+    <div class="r-tech-contact">
+      ${contactParts.map((p, i) => `<span>${p}</span>${i < contactParts.length - 1 ? '<span> | </span>' : ''}`).join('')}
+    </div>
+  </div>
+</div>
+<div class="r-tech-body">
+  ${sectionHtml.map(s => `
+  <section>
+    <h2>${s.title}</h2>
+    <div class="r-tech-entry">
+      <p class="r-tech-p" style="white-space: pre-wrap;">${s.text}</p>
+    </div>
+  </section>`).join('')}
+</div></div>`;
+  }
+
+  return `<div class="r r-minimal">
+<div class="r-minimal-head">
+  <h1>${name}</h1>
+  <div class="r-minimal-contact">
+    ${contactParts.map(p => `<span>${p}</span>`).join('')}
+  </div>
+</div>
+<div class="r-minimal-body">
+  ${sectionHtml.map(s => `
+  <section>
+    <h2>${s.title}</h2>
+    <div class="r-minimal-entry">
+      <p class="r-entry-desc" style="white-space: pre-wrap;">${s.text}</p>
+    </div>
+  </section>`).join('')}
+</div></div>`;
 }
 
 const fullTemplateHtml = computed(() => {
@@ -1193,6 +1089,30 @@ const fullTemplateHtml = computed(() => {
   font-size: 14px;
   line-height: 1.7;
   color: var(--slate-300);
+}
+
+.banner-loading {
+  color: var(--slate-500);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.banner-error {
+  color: var(--red-400);
+}
+
+.retry-link {
+  background: none;
+  border: none;
+  color: var(--emerald-400);
+  cursor: pointer;
+  font-size: 14px;
+  margin-left: 8px;
+  text-decoration: underline;
 }
 
 .stats-row {
@@ -1813,977 +1733,152 @@ const fullTemplateHtml = computed(() => {
   color: #1e293b;
 }
 
-.resume-paper :deep(.resume-template) {
-  font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
-  color: #1f2937;
-  line-height: 1.6;
-  background: white;
-}
-
-.resume-paper :deep(.resume-template *) {
-  box-sizing: border-box;
-}
-
-/* Executive Pro Template */
-.resume-paper :deep(.resume-template.executive-pro) {
-  background: white;
-  padding: 0;
-}
-
-.resume-paper :deep(.resume-header-pro) {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  padding: 32px 40px;
-  border-bottom: 1px solid #e5e7eb;
-  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
-}
-
-.resume-paper :deep(.header-left) {
-  flex: 1;
-}
-
-.resume-paper :deep(.name-title) {
-  font-size: 36px;
-  font-weight: 800;
-  color: #1f2937;
-  margin: 0 0 16px 0;
-  letter-spacing: 1px;
-}
-
-.resume-paper :deep(.info-lines) {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.resume-paper :deep(.info-line) {
-  font-size: 13px;
-  color: #4b5563;
-  margin: 0;
+.resume-paper :deep(.r) {
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  color: #1a1a1a;
   line-height: 1.6;
 }
 
-.resume-paper :deep(.header-right) {
-  margin-left: 32px;
-}
+/* ── Minimal Clean ── */
+.resume-paper :deep(.r-minimal) { padding: 56px 64px; }
+.resume-paper :deep(.r-minimal-head) { text-align: center; margin-bottom: 40px; }
+.resume-paper :deep(.r-minimal-head h1) { font-size: 38px; font-weight: 800; letter-spacing: 4px; margin: 0 0 12px; color: #000; }
+.resume-paper :deep(.r-minimal-contact) { font-size: 13px; color: #777; display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }
+.resume-paper :deep(.r-minimal-body section) { margin-bottom: 28px; }
+.resume-paper :deep(.r-minimal-body h2) { font-size: 15px; font-weight: 700; letter-spacing: 2px; margin: 0 0 8px; color: #000; text-transform: uppercase; }
+.resume-paper :deep(.r-minimal-body h2::after) { content: ''; display: block; width: 100%; height: 1px; background: #000; margin-top: 6px; }
+.resume-paper :deep(.r-minimal-entry) { margin-bottom: 16px; }
+.resume-paper :deep(.r-entry-row) { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; margin-bottom: 2px; }
+.resume-paper :deep(.r-entry-row strong) { font-size: 15px; color: #000; }
+.resume-paper :deep(.r-entry-row span) { font-size: 13px; color: #888; }
+.resume-paper :deep(.r-entry-sub) { font-size: 13px; color: #555; margin-bottom: 4px; }
+.resume-paper :deep(.r-entry-desc) { font-size: 13px; color: #444; margin: 4px 0; line-height: 1.7; }
+.resume-paper :deep(.r-entry-list) { margin: 4px 0; padding-left: 18px; font-size: 13px; color: #444; line-height: 1.8; }
+.resume-paper :deep(.r-entry-list li) { margin-bottom: 2px; }
+.resume-paper :deep(.r-skill-row) { font-size: 13px; color: #444; margin-bottom: 4px; line-height: 1.8; }
+.resume-paper :deep(.r-skill-row strong) { color: #000; margin-right: 4px; }
+
+/* ── Executive ── */
+.resume-paper :deep(.r-exec) { padding: 0; }
+.resume-paper :deep(.r-exec-head) { padding: 40px 56px 28px; background: #f8fafc; border-bottom: 3px solid #1a2744; display: flex; justify-content: space-between; }
+.resume-paper :deep(.r-exec-head-l h1) { font-size: 36px; font-weight: 800; color: #1a2744; margin: 0 0 6px; letter-spacing: 2px; }
+.resume-paper :deep(.r-exec-title) { font-size: 17px; color: #1a2744; font-weight: 600; margin-bottom: 10px; }
+.resume-paper :deep(.r-exec-meta) { font-size: 13px; color: #4b5563; margin-bottom: 4px; }
+.resume-paper :deep(.r-exec-contact) { font-size: 13px; color: #4b5563; }
+.resume-paper :deep(.r-exec-sep) { margin: 0 8px; color: #cbd5e1; }
+.resume-paper :deep(.r-exec-avatar) { width: 90px; height: 90px; border-radius: 50%; overflow: hidden; background: linear-gradient(135deg, #1a2744, #2d4a7a); }
+.resume-paper :deep(.r-exec-body) { padding: 28px 56px 48px; }
+.resume-paper :deep(.r-exec-body section) { margin-bottom: 24px; }
+.resume-paper :deep(.r-exec-banner) { background: #1a2744; color: #fff; padding: 8px 18px; font-size: 14px; font-weight: 700; letter-spacing: 2px; margin-bottom: 14px; display: inline-block; }
+.resume-paper :deep(.r-exec-entry) { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #f1f5f9; }
+.resume-paper :deep(.r-exec-entry:last-child) { border-bottom: none; }
+.resume-paper :deep(.r-exec-entry-row) { display: flex; justify-content: space-between; font-size: 15px; margin-bottom: 4px; }
+.resume-paper :deep(.r-exec-entry-row strong) { color: #1a2744; }
+.resume-paper :deep(.r-exec-date) { font-size: 13px; color: #3b82f6; font-weight: 500; }
+.resume-paper :deep(.r-exec-entry-sub) { font-size: 13px; color: #6b7280; margin-bottom: 6px; }
+.resume-paper :deep(.r-exec-p) { font-size: 13px; color: #4b5563; margin: 4px 0; line-height: 1.7; }
+.resume-paper :deep(.r-exec-list) { margin: 4px 0; padding-left: 18px; font-size: 13px; color: #4b5563; line-height: 1.8; }
+.resume-paper :deep(.r-exec-list li) { margin-bottom: 2px; }
+.resume-paper :deep(.r-exec-skills) { display: flex; flex-wrap: wrap; gap: 8px; }
+.resume-paper :deep(.r-exec-skills span) { padding: 6px 16px; background: #f1f5f9; color: #1a2744; font-size: 13px; font-weight: 500; border-radius: 4px; }
+
+/* ── Modern Tech ── */
+.resume-paper :deep(.r-tech) { padding: 0; }
+.resume-paper :deep(.r-tech-head) { padding: 36px 56px; background: linear-gradient(135deg, #2563eb, #7c3aed); color: #fff; display: flex; justify-content: space-between; align-items: center; }
+.resume-paper :deep(.r-tech-head-l h1) { font-size: 34px; font-weight: 800; margin: 0 0 4px; letter-spacing: 2px; }
+.resume-paper :deep(.r-tech-role) { font-size: 16px; opacity: 0.9; margin-bottom: 8px; font-weight: 500; }
+.resume-paper :deep(.r-tech-contact) { font-size: 13px; opacity: 0.85; }
+.resume-paper :deep(.r-tech-contact span) { margin-right: 4px; }
+.resume-paper :deep(.r-tech-stack) { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.resume-paper :deep(.r-tech-stack span) { padding: 6px 14px; background: rgba(255,255,255,0.2); border-radius: 20px; font-size: 13px; font-weight: 500; }
+.resume-paper :deep(.r-tech-body) { padding: 32px 56px 48px; }
+.resume-paper :deep(.r-tech-body section) { margin-bottom: 24px; }
+.resume-paper :deep(.r-tech-body h2) { font-size: 16px; font-weight: 700; color: #2563eb; margin: 0 0 12px; padding-bottom: 6px; border-bottom: 2px solid #2563eb; letter-spacing: 1px; }
+.resume-paper :deep(.r-tech-skill-row) { font-size: 13px; color: #334155; margin-bottom: 6px; line-height: 1.7; }
+.resume-paper :deep(.r-tech-label) { font-weight: 700; color: #2563eb; margin-right: 8px; min-width: 56px; display: inline-block; }
+.resume-paper :deep(.r-tech-entry) { margin-bottom: 14px; }
+.resume-paper :deep(.r-tech-entry-head) { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 4px; }
+.resume-paper :deep(.r-tech-entry-head strong) { color: #1e293b; }
+.resume-paper :deep(.r-tech-entry-head span) { font-size: 13px; color: #64748b; }
+.resume-paper :deep(.r-tech-list) { margin: 4px 0; padding-left: 18px; font-size: 13px; color: #475569; line-height: 1.8; }
+.resume-paper :deep(.r-tech-p) { font-size: 13px; color: #475569; margin: 4px 0; line-height: 1.7; }
+
+/* ── Creative ── */
+.resume-paper :deep(.r-creative) { padding: 0; }
+.resume-paper :deep(.r-creative-banner) { padding: 44px 56px; color: #fff; display: flex; justify-content: space-between; align-items: center; }
+.resume-paper :deep(.r-creative-banner-l h1) { font-size: 40px; font-weight: 800; margin: 0 0 6px; letter-spacing: 3px; }
+.resume-paper :deep(.r-creative-title) { font-size: 18px; opacity: 0.95; margin-bottom: 8px; font-weight: 500; }
+.resume-paper :deep(.r-creative-motto) { font-size: 14px; opacity: 0.8; font-style: italic; }
+.resume-paper :deep(.r-creative-avatar) { width: 80px; height: 80px; background: rgba(255,255,255,0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 36px; }
+.resume-paper :deep(.r-creative-body) { padding: 28px 0 40px; }
+.resume-paper :deep(.r-creative-grid) { display: flex; gap: 32px; }
+.resume-paper :deep(.r-creative-main) { flex: 1; padding-left: 56px; }
+.resume-paper :deep(.r-creative-side) { width: 220px; background: #faf5ff; padding: 24px 20px; }
+.resume-paper :deep(.r-creative-block) { font-size: 15px; font-weight: 700; color: #7c3aed; margin-bottom: 12px; letter-spacing: 2px; padding-bottom: 6px; border-bottom: 2px solid #7c3aed; }
+.resume-paper :deep(.r-creative-work) { margin-bottom: 18px; }
+.resume-paper :deep(.r-creative-work-head) { display: flex; justify-content: space-between; font-size: 15px; margin-bottom: 2px; }
+.resume-paper :deep(.r-creative-work-head strong) { color: #1e293b; }
+.resume-paper :deep(.r-creative-work-head span) { font-size: 13px; color: #7c3aed; }
+.resume-paper :deep(.r-creative-work-role) { font-size: 13px; color: #6b7280; margin-bottom: 6px; }
+.resume-paper :deep(.r-creative-work ul) { margin: 4px 0; padding-left: 18px; font-size: 13px; color: #4b5563; line-height: 1.8; }
+.resume-paper :deep(.r-creative-edu) { font-size: 14px; }
+.resume-paper :deep(.r-creative-edu div:first-child) { display: flex; justify-content: space-between; margin-bottom: 2px; }
+.resume-paper :deep(.r-creative-edu div:first-child span) { font-size: 13px; color: #7c3aed; }
+.resume-paper :deep(.r-creative-edu-sub) { font-size: 13px; color: #6b7280; }
+.resume-paper :deep(.r-creative-skillbar) { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.resume-paper :deep(.r-creative-skillbar span) { font-size: 12px; color: #4b5563; width: 80px; }
+.resume-paper :deep(.r-creative-bar) { flex: 1; height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden; }
+.resume-paper :deep(.r-creative-bar i) { display: block; height: 100%; background: linear-gradient(90deg, #7c3aed, #ec4899); border-radius: 3px; }
+.resume-paper :deep(.r-creative-contact-list) { font-size: 13px; color: #4b5563; line-height: 2; }
+
+/* ── Elegant ── */
+.resume-paper :deep(.r-elegant) { padding: 0; }
+.resume-paper :deep(.r-elegant-head) { padding: 48px 64px 32px; text-align: center; border-bottom: 3px double #b45309; margin: 0 56px; }
+.resume-paper :deep(.r-elegant-head h1) { font-size: 36px; font-weight: 800; color: #78350f; margin: 0 0 8px; letter-spacing: 6px; font-family: 'Noto Serif SC', 'STSong', serif; }
+.resume-paper :deep(.r-elegant-subtitle) { font-size: 16px; color: #92400e; margin-bottom: 10px; font-weight: 500; }
+.resume-paper :deep(.r-elegant-contact) { font-size: 13px; color: #78716c; }
+.resume-paper :deep(.r-elegant-sep) { margin: 0 10px; color: #d6d3d1; }
+.resume-paper :deep(.r-elegant-body) { padding: 28px 64px 48px; }
+.resume-paper :deep(.r-elegant-body section) { margin-bottom: 28px; }
+.resume-paper :deep(.r-elegant-body h2) { font-size: 17px; font-weight: 700; color: #78350f; margin: 0 0 12px; letter-spacing: 2px; border-bottom: 1px solid #e7d7c4; padding-bottom: 8px; }
+.resume-paper :deep(.r-elegant-entry) { margin-bottom: 18px; }
+.resume-paper :deep(.r-elegant-entry-row) { display: flex; justify-content: space-between; font-size: 15px; margin-bottom: 4px; }
+.resume-paper :deep(.r-elegant-entry-row strong) { color: #78350f; }
+.resume-paper :deep(.r-elegant-entry-row span) { font-size: 13px; color: #a8a29e; }
+.resume-paper :deep(.r-elegant-entry-sub) { font-size: 13px; color: #78716c; margin-bottom: 6px; }
+.resume-paper :deep(.r-elegant-body ul) { margin: 4px 0; padding-left: 18px; font-size: 13px; color: #57534e; line-height: 1.8; }
+.resume-paper :deep(.r-elegant-body ul li) { margin-bottom: 2px; }
+.resume-paper :deep(.r-elegant-skills) { display: flex; flex-wrap: wrap; gap: 10px; }
+.resume-paper :deep(.r-elegant-skills span) { padding: 8px 20px; background: #fffbeb; color: #78350f; border: 1px solid #e7d7c4; font-size: 13px; border-radius: 2px; }
+
+/* ── Modern Minimal ── */
+.resume-paper :deep(.r-modern) { padding: 0; }
+.resume-paper :deep(.r-modern-banner) { padding: 40px 56px; color: #fff; display: flex; justify-content: space-between; align-items: center; }
+.resume-paper :deep(.r-modern-label) { font-size: 10px; letter-spacing: 4px; opacity: 0.8; margin-bottom: 8px; text-transform: uppercase; }
+.resume-paper :deep(.r-modern-banner-l h1) { font-size: 42px; font-weight: 800; margin: 0 0 6px; letter-spacing: 8px; }
+.resume-paper :deep(.r-modern-slogan) { font-size: 14px; opacity: 0.9; }
+.resume-paper :deep(.r-modern-hex) { width: 90px; height: 90px; background: rgba(255,255,255,0.15); display: flex; align-items: center; justify-content: center; font-size: 40px; clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%); }
+.resume-paper :deep(.r-modern-body) { padding: 32px 56px 48px; }
+.resume-paper :deep(.r-modern-body section) { margin-bottom: 24px; }
+.resume-paper :deep(.r-modern-block) { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 700; color: #7c3aed; margin-bottom: 14px; letter-spacing: 2px; }
+.resume-paper :deep(.r-modern-block span) { width: 4px; height: 20px; background: linear-gradient(180deg, #7c3aed, #a78bfa); border-radius: 2px; display: inline-block; }
+.resume-paper :deep(.r-modern-info-grid) { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 32px; }
+.resume-paper :deep(.r-modern-info-grid div) { font-size: 14px; }
+.resume-paper :deep(.r-modern-info-grid label) { color: #9ca3af; font-size: 12px; display: block; margin-bottom: 2px; }
+.resume-paper :deep(.r-modern-info-grid span) { color: #1f2937; font-weight: 600; }
+.resume-paper :deep(.r-modern-edu) { font-size: 14px; }
+.resume-paper :deep(.r-modern-edu div:first-child) { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.resume-paper :deep(.r-modern-edu div:first-child span) { font-size: 13px; color: #7c3aed; }
+.resume-paper :deep(.r-modern-sub) { font-size: 13px; color: #6b7280; }
+.resume-paper :deep(.r-modern-work) { margin-bottom: 8px; }
+.resume-paper :deep(.r-modern-work-head) { display: flex; justify-content: space-between; font-size: 15px; margin-bottom: 2px; }
+.resume-paper :deep(.r-modern-work-head strong) { color: #1f2937; }
+.resume-paper :deep(.r-modern-work-head span) { font-size: 13px; color: #7c3aed; }
+.resume-paper :deep(.r-modern-work-role) { font-size: 13px; color: #6b7280; margin-bottom: 6px; }
+.resume-paper :deep(.r-modern-body ul) { margin: 4px 0; padding-left: 18px; font-size: 13px; color: #4b5563; line-height: 1.8; }
+.resume-paper :deep(.r-modern-tags) { display: flex; flex-wrap: wrap; gap: 8px; }
+.resume-paper :deep(.r-modern-tags span) { padding: 8px 18px; background: linear-gradient(135deg, #f5f3ff, #ede9fe); color: #7c3aed; font-size: 13px; font-weight: 500; border-left: 3px solid #7c3aed; }
 
-.resume-paper :deep(.avatar-pro) {
-  width: 100px;
-  height: 100px;
-  border-radius: 50%;
-  overflow: hidden;
-  background: #f3f4f6;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-.resume-paper :deep(.resume-body-pro) {
-  padding: 24px 40px;
-}
-
-.resume-paper :deep(.section-pro) {
-  margin-bottom: 24px;
-}
-
-.resume-paper :deep(.section-banner) {
-  padding: 10px 20px;
-  color: white;
-  font-size: 15px;
-  font-weight: 700;
-  margin-bottom: 16px;
-  border-radius: 4px;
-  letter-spacing: 1px;
-}
-
-.resume-paper :deep(.section-banner h3) {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.resume-paper :deep(.section-content) {
-  padding: 0 4px;
-}
-
-.resume-paper :deep(.entry-item) {
-  margin-bottom: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #f3f4f6;
-}
-
-.resume-paper :deep(.entry-item:last-child) {
-  border-bottom: none;
-  margin-bottom: 0;
-  padding-bottom: 0;
-}
-
-.resume-paper :deep(.entry-details) {
-  padding-left: 0;
-}
-
-.resume-paper :deep(.detail-line) {
-  font-size: 13px;
-  color: #4b5563;
-  margin: 0 0 6px 0;
-  line-height: 1.6;
-}
-
-.resume-paper :deep(.skills-list) {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.resume-paper :deep(.skill-line) {
-  font-size: 13px;
-  color: #4b5563;
-  margin: 0;
-  line-height: 1.6;
-}
-
-/* Tech A4 Template */
-.resume-paper :deep(.resume-template.tech-a4) {
-  background: white;
-  padding: 0;
-}
-
-.resume-paper :deep(.tech-header) {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  padding: 32px 40px;
-  border-bottom: 1px solid #e5e7eb;
-  position: relative;
-}
-
-.resume-paper :deep(.tech-header-main) {
-  flex: 1;
-  text-align: center;
-}
-
-.resume-paper :deep(.tech-name) {
-  font-size: 32px;
-  font-weight: 800;
-  color: #1f2937;
-  margin: 0 0 16px 0;
-  letter-spacing: 2px;
-}
-
-.resume-paper :deep(.tech-info-block) {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-}
-
-.resume-paper :deep(.tech-info-line) {
-  font-size: 13px;
-  color: #4b5563;
-  margin: 0;
-  line-height: 1.6;
-}
-
-.resume-paper :deep(.tech-avatar) {
-  position: absolute;
-  right: 40px;
-  top: 32px;
-  width: 90px;
-  height: 90px;
-  border-radius: 50%;
-  overflow: hidden;
-  background: #f3f4f6;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-.resume-paper :deep(.tech-body) {
-  padding: 24px 40px;
-}
-
-.resume-paper :deep(.tech-section) {
-  margin-bottom: 20px;
-}
-
-.resume-paper :deep(.tech-banner) {
-  padding: 8px 16px;
-  color: white;
-  font-size: 14px;
-  font-weight: 700;
-  margin-bottom: 12px;
-  border-radius: 2px;
-  letter-spacing: 1px;
-}
-
-.resume-paper :deep(.tech-banner h3) {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.resume-paper :deep(.tech-content) {
-  padding: 0 4px;
-}
-
-.resume-paper :deep(.tech-entry) {
-  margin-bottom: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #f3f4f6;
-}
-
-.resume-paper :deep(.tech-entry:last-child) {
-  border-bottom: none;
-  margin-bottom: 0;
-  padding-bottom: 0;
-}
-
-.resume-paper :deep(.tech-entry-detail) {
-  padding-left: 0;
-}
-
-.resume-paper :deep(.tech-detail-text) {
-  font-size: 12px;
-  color: #4b5563;
-  margin: 0;
-  line-height: 1.6;
-}
-
-.resume-paper :deep(.tech-skill-item) {
-  font-size: 13px;
-  color: #374151;
-  margin-bottom: 8px;
-  line-height: 1.6;
-}
-
-/* Minimal A4 Template */
-.resume-paper :deep(.resume-template.minimal-a4) {
-  background: white;
-  padding: 0;
-}
-
-.resume-paper :deep(.minimal-header) {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  padding: 40px 50px 24px 50px;
-  position: relative;
-}
-
-.resume-paper :deep(.minimal-header-content) {
-  flex: 1;
-  text-align: center;
-}
-
-.resume-paper :deep(.minimal-name) {
-  font-size: 36px;
-  font-weight: 800;
-  color: #000000;
-  margin: 0 0 16px 0;
-  letter-spacing: 4px;
-}
-
-.resume-paper :deep(.minimal-info-lines) {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-
-.resume-paper :deep(.minimal-info-row) {
-  font-size: 13px;
-  color: #000000;
-  margin: 0;
-  line-height: 1.6;
-}
-
-.resume-paper :deep(.minimal-avatar) {
-  position: absolute;
-  right: 50px;
-  top: 40px;
-  width: 85px;
-  height: 85px;
-  border-radius: 50%;
-  overflow: hidden;
-  background: #f3f4f6;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.resume-paper :deep(.minimal-body) {
-  padding: 0 50px 40px 50px;
-}
-
-.resume-paper :deep(.minimal-section) {
-  margin-bottom: 20px;
-}
-
-.resume-paper :deep(.minimal-section-title) {
-  font-size: 15px;
-  font-weight: 700;
-  color: #000000;
-  margin: 0 0 6px 0;
-  letter-spacing: 1px;
-}
-
-.resume-paper :deep(.minimal-divider) {
-  height: 1px;
-  background: #000000;
-  margin-bottom: 12px;
-  width: 100%;
-}
-
-.resume-paper :deep(.minimal-entry) {
-  margin-bottom: 12px;
-}
-
-.resume-paper :deep(.minimal-entry-detail) {
-  padding-left: 0;
-}
-
-.resume-paper :deep(.minimal-detail-text) {
-  font-size: 13px;
-  color: #000000;
-  margin: 0;
-  line-height: 1.8;
-}
-
-.resume-paper :deep(.minimal-skills) {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.resume-paper :deep(.minimal-skill-line) {
-  font-size: 13px;
-  color: #000000;
-  margin: 0;
-  line-height: 1.6;
-}
-
-.resume-paper :deep(.minimal-evaluation) {
-  font-size: 13px;
-  color: #000000;
-  margin: 0;
-  line-height: 1.8;
-  text-align: justify;
-}
-
-/* Creative Design Template */
-.resume-paper :deep(.resume-template.creative) {
-  background: white;
-  padding: 0;
-}
-
-.resume-paper :deep(.resume-template.creative .resume-banner) {
-  padding: 40px;
-  color: white;
-  position: relative;
-  overflow: hidden;
-}
-
-.resume-paper :deep(.resume-template.creative .banner-content) {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.resume-paper :deep(.resume-template.creative .banner-left) {
-  flex: 1;
-}
-
-.resume-paper :deep(.resume-template.creative .banner-title-cn) {
-  font-size: 48px;
-  font-weight: 800;
-  margin: 0 0 8px 0;
-  letter-spacing: 4px;
-}
-
-.resume-paper :deep(.resume-template.creative .banner-title-en) {
-  font-size: 16px;
-  opacity: 0.9;
-  margin: 0 0 12px 0;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-}
-
-.resume-paper :deep(.resume-template.creative .banner-slogan) {
-  font-size: 14px;
-  opacity: 0.8;
-  margin: 0 0 16px 0;
-}
-
-.resume-paper :deep(.resume-template.creative .banner-icons) {
-  display: flex;
-  gap: 12px;
-}
-
-.resume-paper :deep(.resume-template.creative .icon-gold) {
-  width: 32px;
-  height: 32px;
-  background: linear-gradient(135deg, #fbbf24, #f59e0b);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  box-shadow: 0 2px 8px rgba(251, 191, 36, 0.4);
-}
-
-.resume-paper :deep(.resume-template.creative .banner-right) {
-  margin-left: 40px;
-}
-
-.resume-paper :deep(.resume-template.creative .avatar-circle) {
-  width: 120px;
-  height: 120px;
-  background: white;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 60px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-  overflow: hidden;
-}
-
-.resume-paper :deep(.resume-template.creative .banner-accent) {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 4px;
-  background: linear-gradient(90deg, #86198f, #fbbf24, #86198f);
-}
-
-.resume-paper :deep(.resume-template.creative .resume-body-modern) {
-  padding: 32px 40px;
-}
-
-.resume-paper :deep(.resume-template.creative .resume-section-modern) {
-  margin-bottom: 28px;
-}
-
-.resume-paper :deep(.resume-template.creative .section-block) {
-  padding: 10px 20px;
-  color: white;
-  font-size: 16px;
-  font-weight: 700;
-  margin-bottom: 16px;
-  position: relative;
-  overflow: hidden;
-  letter-spacing: 2px;
-}
-
-.resume-paper :deep(.resume-template.creative .block-pattern) {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 3px,
-    rgba(255, 255, 255, 0.1) 3px,
-    rgba(255, 255, 255, 0.1) 6px
-  );
-}
-
-.resume-paper :deep(.resume-template.creative .section-block h3) {
-  margin: 0;
-  position: relative;
-  z-index: 1;
-}
-
-.resume-paper :deep(.resume-template.creative .section-grid) {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px 24px;
-}
-
-.resume-paper :deep(.resume-template.creative .grid-item) {
-  font-size: 14px;
-  color: #374151;
-}
-
-.resume-paper :deep(.resume-template.creative .grid-item .value) {
-  color: #1f2937;
-  font-weight: 600;
-}
-
-.resume-paper :deep(.resume-template.creative .work-item-modern) {
-  margin-bottom: 16px;
-}
-
-.resume-paper :deep(.resume-template.creative .work-detail-text) {
-  font-size: 14px;
-  color: #4b5563;
-  margin: 0;
-  line-height: 1.8;
-}
-
-.resume-paper :deep(.resume-template.creative .skill-tags-modern) {
-  font-size: 14px;
-  color: #4b5563;
-  line-height: 1.8;
-}
-
-/* Elegant Template */
-.resume-paper :deep(.resume-template.elegant) {
-  background: white;
-  padding: 0;
-}
-
-.resume-paper :deep(.resume-template.elegant .resume-banner) {
-  padding: 40px;
-  color: white;
-  position: relative;
-  overflow: hidden;
-}
-
-.resume-paper :deep(.resume-template.elegant .banner-content) {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.resume-paper :deep(.resume-template.elegant .banner-left) {
-  flex: 1;
-}
-
-.resume-paper :deep(.resume-template.elegant .banner-title-cn) {
-  font-size: 48px;
-  font-weight: 800;
-  margin: 0 0 8px 0;
-  letter-spacing: 4px;
-}
-
-.resume-paper :deep(.resume-template.elegant .banner-title-en) {
-  font-size: 16px;
-  opacity: 0.9;
-  margin: 0 0 12px 0;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-}
-
-.resume-paper :deep(.resume-template.elegant .banner-slogan) {
-  font-size: 14px;
-  opacity: 0.8;
-  margin: 0 0 16px 0;
-}
-
-.resume-paper :deep(.resume-template.elegant .banner-icons) {
-  display: flex;
-  gap: 12px;
-}
-
-.resume-paper :deep(.resume-template.elegant .icon-gold) {
-  width: 32px;
-  height: 32px;
-  background: linear-gradient(135deg, #fbbf24, #f59e0b);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  box-shadow: 0 2px 8px rgba(251, 191, 36, 0.4);
-}
-
-.resume-paper :deep(.resume-template.elegant .banner-right) {
-  margin-left: 40px;
-}
-
-.resume-paper :deep(.resume-template.elegant .avatar-circle) {
-  width: 120px;
-  height: 120px;
-  background: white;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 60px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-  overflow: hidden;
-}
-
-.resume-paper :deep(.resume-template.elegant .banner-accent) {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 4px;
-  background: linear-gradient(90deg, #92400e, #fbbf24, #92400e);
-}
-
-.resume-paper :deep(.resume-template.elegant .resume-body-modern) {
-  padding: 32px 40px;
-}
-
-.resume-paper :deep(.resume-template.elegant .resume-section-modern) {
-  margin-bottom: 28px;
-}
-
-.resume-paper :deep(.resume-template.elegant .section-block) {
-  padding: 10px 20px;
-  color: white;
-  font-size: 16px;
-  font-weight: 700;
-  margin-bottom: 16px;
-  position: relative;
-  overflow: hidden;
-  letter-spacing: 2px;
-}
-
-.resume-paper :deep(.resume-template.elegant .block-pattern) {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 3px,
-    rgba(255, 255, 255, 0.1) 3px,
-    rgba(255, 255, 255, 0.1) 6px
-  );
-}
-
-.resume-paper :deep(.resume-template.elegant .section-block h3) {
-  margin: 0;
-  position: relative;
-  z-index: 1;
-}
-
-.resume-paper :deep(.resume-template.elegant .section-grid) {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px 24px;
-}
-
-.resume-paper :deep(.resume-template.elegant .grid-item) {
-  font-size: 14px;
-  color: #374151;
-}
-
-.resume-paper :deep(.resume-template.elegant .grid-item .value) {
-  color: #1f2937;
-  font-weight: 600;
-}
-
-.resume-paper :deep(.resume-template.elegant .edu-item-modern) {
-  margin-bottom: 12px;
-}
-
-.resume-paper :deep(.resume-template.elegant .edu-detail-text) {
-  font-size: 14px;
-  color: #4b5563;
-  margin: 0;
-  line-height: 1.8;
-}
-
-.resume-paper :deep(.resume-template.elegant .work-item-modern) {
-  margin-bottom: 16px;
-}
-
-.resume-paper :deep(.resume-template.elegant .work-detail-text) {
-  font-size: 14px;
-  color: #4b5563;
-  margin: 0;
-  line-height: 1.8;
-}
-
-.resume-paper :deep(.resume-template.elegant .skill-tags-modern) {
-  font-size: 14px;
-  color: #4b5563;
-  line-height: 1.8;
-}
-
-/* Modern Minimal Template */
-.resume-paper :deep(.resume-template.modern-minimal) {
-  background: white;
-  padding: 0;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .resume-banner) {
-  padding: 40px;
-  color: white;
-  position: relative;
-  overflow: hidden;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .banner-content) {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .banner-left) {
-  flex: 1;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .banner-title-cn) {
-  font-size: 48px;
-  font-weight: 800;
-  margin: 0 0 8px 0;
-  letter-spacing: 4px;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .banner-title-en) {
-  font-size: 16px;
-  opacity: 0.9;
-  margin: 0 0 12px 0;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .banner-slogan) {
-  font-size: 14px;
-  opacity: 0.8;
-  margin: 0 0 16px 0;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .banner-icons) {
-  display: flex;
-  gap: 12px;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .icon-gold) {
-  width: 32px;
-  height: 32px;
-  background: linear-gradient(135deg, #fbbf24, #f59e0b);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  box-shadow: 0 2px 8px rgba(251, 191, 36, 0.4);
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .banner-right) {
-  margin-left: 40px;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .avatar-circle) {
-  width: 120px;
-  height: 120px;
-  background: white;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 60px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-  overflow: hidden;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .banner-accent) {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 4px;
-  background: linear-gradient(90deg, #7c3aed, #fbbf24, #7c3aed);
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .resume-body-modern) {
-  padding: 32px 40px;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .resume-section-modern) {
-  margin-bottom: 28px;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .section-block) {
-  padding: 10px 20px;
-  color: white;
-  font-size: 16px;
-  font-weight: 700;
-  margin-bottom: 16px;
-  position: relative;
-  overflow: hidden;
-  letter-spacing: 2px;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .block-pattern) {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 3px,
-    rgba(255, 255, 255, 0.1) 3px,
-    rgba(255, 255, 255, 0.1) 6px
-  );
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .section-block h3) {
-  margin: 0;
-  position: relative;
-  z-index: 1;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .section-grid) {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px 24px;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .grid-item) {
-  font-size: 14px;
-  color: #374151;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .grid-item .value) {
-  color: #1f2937;
-  font-weight: 600;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .edu-item-modern) {
-  margin-bottom: 12px;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .edu-detail-text) {
-  font-size: 14px;
-  color: #4b5563;
-  margin: 0;
-  line-height: 1.8;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .work-item-modern) {
-  margin-bottom: 16px;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .work-detail-text) {
-  font-size: 14px;
-  color: #4b5563;
-  margin: 0;
-  line-height: 1.8;
-}
-
-.resume-paper :deep(.resume-template.modern-minimal .skill-tags-modern) {
-  font-size: 14px;
-  color: #4b5563;
-  line-height: 1.8;
-}
-
-/* Startup A4 Template */
-.resume-paper :deep(.resume-template.startup-a4) {
-  background: white;
-  padding: 0;
-  position: relative;
-}
-
-.resume-paper :deep(.startup-header) {
-  position: relative;
-  background: #0d9488;
-}
-
-.resume-paper :deep(.startup-header-content) {
-  position: relative;
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  padding: 32px 50px;
-  z-index: 1;
-}
-
-.resume-paper :deep(.startup-left) {
-  flex: 1;
-}
-
-.resume-paper :deep(.startup-name) {
-  font-size: 32px;
-  font-weight: 800;
-  color: #ffffff;
-  margin: 0 0 12px 0;
-  letter-spacing: 2px;
-}
-
-.resume-paper :deep(.startup-intention) {
-  font-size: 13px;
-  color: #ffffff;
-  margin: 0 0 16px 0;
-  opacity: 0.95;
-}
-
-.resume-paper :deep(.startup-pipe) {
-  margin: 0 8px;
-  opacity: 0.6;
-}
-
-.resume-paper :deep(.startup-right) {
-  margin-left: 24px;
-}
-
-.resume-paper :deep(.startup-avatar) {
-  width: 90px;
-  height: 90px;
-  border-radius: 12px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.15);
-  border: 3px solid #ffffff;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-.resume-paper :deep(.startup-body) {
-  padding: 24px 50px 40px 50px;
-}
-
-.resume-paper :deep(.startup-section) {
-  margin-bottom: 20px;
-}
-
-.resume-paper :deep(.startup-section-title) {
-  font-size: 15px;
-  font-weight: 700;
-  color: #0d9488;
-  margin: 0 0 6px 0;
-  letter-spacing: 1px;
-}
-
-.resume-paper :deep(.startup-divider) {
-  height: 1px;
-  background: #0d9488;
-  margin-bottom: 12px;
-  width: 100%;
-}
-
-.resume-paper :deep(.startup-entry) {
-  margin-bottom: 12px;
-}
-
-.resume-paper :deep(.startup-entry-detail) {
-  padding-left: 0;
-}
-
-.resume-paper :deep(.startup-detail-text) {
-  font-size: 13px;
-  color: #4b5563;
-  margin: 0 0 4px 0;
-  line-height: 1.8;
-}
-
-.resume-paper :deep(.startup-skills) {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.resume-paper :deep(.startup-skill-line) {
-  font-size: 13px;
-  color: #4b5563;
-  margin: 0;
-  line-height: 1.6;
-}
-
-.resume-paper :deep(.startup-evaluation) {
-  font-size: 13px;
-  color: #4b5563;
-  margin: 0;
-  line-height: 1.8;
-  text-align: justify;
-}
 
 @media print {
   body * {

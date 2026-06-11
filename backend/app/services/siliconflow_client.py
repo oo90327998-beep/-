@@ -128,6 +128,46 @@ class SiliconFlowClient:
             raise RuntimeError(f"无法解析硅基流动响应: {data}")
 
 
+    def embed(self, texts: List[str], max_retries: int = 3, timeout: int = 60) -> List[List[float]]:
+        url = self.base_url.rstrip("/") + "/embeddings"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.model,
+            "input": texts,
+        }
+
+        proxies = {"http": None, "https": None}
+
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=timeout, proxies=proxies)
+                break
+            except requests.exceptions.Timeout as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 5
+                    print(f"[SiliconFlow] embedding 超时，{wait_time}秒后重试 (尝试 {attempt + 2}/{max_retries})...")
+                    time.sleep(wait_time)
+                else:
+                    raise RuntimeError(f"硅基流动 embedding 请求超时") from e
+            except requests.RequestException as e:
+                raise RuntimeError(f"硅基流动 embedding 请求异常: {e}") from e
+
+        if not resp.ok:
+            raise RuntimeError(f"硅基流动 embedding 返回错误: HTTP {resp.status_code}")
+
+        data = resp.json()
+        try:
+            items = sorted(data["data"], key=lambda x: x.get("index", 0))
+            return [item["embedding"] for item in items]
+        except Exception:
+            raise RuntimeError(f"无法解析硅基流动 embedding 响应: {data}")
+
+
 def extract_json_object(text: str) -> Any:
     text = text.strip()
     if not text:

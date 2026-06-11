@@ -2,36 +2,18 @@ import os
 from typing import AsyncGenerator
 
 from dotenv import load_dotenv
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from supabase import create_async_client, AsyncClient
 
 load_dotenv()
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:54322/postgres",
-)
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
-# asyncpg requires postgresql+asyncpg:// scheme — ensure it regardless of env value
-if DATABASE_URL.startswith("postgresql://"):
-    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
-elif DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
-
-engine = create_async_engine(
-    DATABASE_URL,
-    pool_size=20,
-    max_overflow=10,
-    echo=False,
-)
-
-async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+_client: AsyncClient | None = None
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with async_session() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
+async def get_supabase() -> AsyncGenerator[AsyncClient, None]:
+    global _client
+    if _client is None:
+        _client = await create_async_client(SUPABASE_URL, SUPABASE_KEY)
+    yield _client

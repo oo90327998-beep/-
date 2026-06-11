@@ -257,34 +257,16 @@ async function handleSubmit() {
     currentStep.value = 0;
 
     ocrResult = await ocrResume(file.value);
-    progress.value = 25;
-    currentStep.value = 1;
-
-    if (abortController.signal.aborted) return;
-
-    const suggestionsResult = await generateSuggestions(ocrResult.resumeId, selectedStyle.value, targetJob.value);
-    progress.value = 55;
-    currentStep.value = 2;
-
-    if (abortController.signal.aborted) return;
-
-    let sections = Array.isArray(ocrResult.sections) ? ocrResult.sections as Section[] : [];
-
-    const transformResult = await transformStyle(ocrResult.resumeId, selectedStyle.value, targetJob.value);
-    sections = transformResult.sections;
-    progress.value = 85;
-    currentStep.value = 3;
-
-    if (abortController.signal.aborted) return;
-
-    await new Promise(r => setTimeout(r, 300));
     progress.value = 100;
     currentStep.value = 4;
 
+    const sections = Array.isArray(ocrResult.sections) ? ocrResult.sections as Section[] : [];
+
+    // OCR 完成就立即展示结果，suggestions 和 transform 由 DiffView 后台加载
     emit('result', {
       resumeId: ocrResult.resumeId,
       sections,
-      suggestions: suggestionsResult,
+      suggestions: null,
       styleType: selectedStyle.value,
       targetJob: targetJob.value,
       images: ocrResult.images || []
@@ -295,13 +277,12 @@ async function handleSubmit() {
     } else {
       error.value = e?.message || '分析失败，请重试';
     }
-    // 即使后续步骤失败，如果 OCR 已完成则仍可跳转到结果页
     if (ocrResult) {
       const sections = Array.isArray(ocrResult.sections) ? ocrResult.sections as Section[] : [];
       emit('result', {
         resumeId: ocrResult.resumeId,
         sections,
-        suggestions: { overall_summary: '分析未完成，请手动获取建议', items: [] },
+        suggestions: null,
         styleType: selectedStyle.value,
         targetJob: targetJob.value,
         images: ocrResult.images || []

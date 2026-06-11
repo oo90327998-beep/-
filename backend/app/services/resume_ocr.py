@@ -11,6 +11,8 @@ import fitz  # PyMuPDF
 from app.services.siliconflow_client import SiliconFlowClient, extract_json_object
 from app.services.constants import CONTENT_PROCESSING_RULES
 
+OCR_MODEL = "PaddlePaddle/PaddleOCR-VL-1.5"
+
 _executor = ThreadPoolExecutor(max_workers=4)
 atexit.register(_executor.shutdown, wait=False)
 
@@ -128,4 +130,30 @@ def llm_extract_sections(client: SiliconFlowClient, resume_text: str) -> Any:
     if isinstance(parsed, dict) and isinstance(parsed.get("sections"), list):
         return parsed["sections"]
     return parsed
+
+
+def ocr_text_from_images(images: List[str]) -> str:
+    """使用 PaddleOCR-VL 从图片中提取文字。images 为 data:image/...;base64,... 格式。"""
+    if not images:
+        return ""
+
+    ocr_client = SiliconFlowClient(model=OCR_MODEL)
+
+    all_text: List[str] = []
+    for img_url in images:
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": img_url}},
+                {"type": "text", "text": "请准确提取这张简历图片中的所有文字内容，保持原有格式和顺序。不要添加任何解释或额外文字，只输出从图片中识别到的原文。"},
+            ],
+        }]
+        try:
+            text = ocr_client.chat(messages=messages, temperature=0.0, max_tokens=4000, timeout=120, max_retries=2)
+            if text and len(text.strip()) > 10:
+                all_text.append(text.strip())
+        except Exception as e:
+            print(f"[image-ocr] OCR failed for image: {e}")
+
+    return "\n\n".join(all_text)
 

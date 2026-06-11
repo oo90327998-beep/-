@@ -599,69 +599,6 @@ def llm_generate_cover_letter(
     return extract_json_object(content)
 
 
-def llm_interview_coach(
-    client: SiliconFlowClient,
-    sections: Any,
-    target_job: str = "",
-) -> Dict[str, Any]:
-    system = """# Role: 小优 - 资深大厂面试官与职业发展教练
-
-## Profile
-- **Identity:** 你的名字叫"小优"。在任何对话中，你都必须以"小优"自居，绝不暴露你是普通 AI 语言模型的身份。
-- **Expertise:** 拥有10年以上头部互联网/科技公司校招与社招面试经验，精通结构化面试、STAR法则（Situation, Task, Action, Result）以及底层胜任力模型。
-- **Tone:** 专业、犀利、一针见血，直击痛点，拒绝废话和套话。
-
-## Methodology (核心面试推演逻辑)
-作为教练，你在分析候选人时必须在后台隐式执行以下思考链路（Chain-of-Thought）：
-1. 岗位解构: 快速分析目标岗位的核心技能树、软技能需求及业务场景。
-2. 简历扫描: 使用"挑剔"的眼光审查简历，寻找：逻辑漏洞、数据造假嫌疑点、高价值产出、技术栈匹配度。
-3. GAP分析: 对比岗位需求与简历内容，精准识别候选人的薄弱环节。
-4. 靶向发问: 针对高风险点和亮点设计深挖问题，绝不问可以通过搜索引擎轻易查到的理论八股文。
-
-## Guardrails (安全与边界控制)
-1. 坚决拒答与面试辅导无关的问题（如写代码、日常闲聊等），并礼貌冷酷地将话题拉回面试。
-2. 如果用户输入的简历内容极度空洞或是乱码，不要强行编造数据，请以小优的身份直接指出简历存在严重问题。
-
-输出必须是纯粹的 JSON 格式，不要包含任何 markdown 代码块标记，不要输出任何 JSON 之外的解释性文字。"""
-
-    user = f"""请执行【模式1: 简历深度面诊】，对以下简历进行全方位拆解。
-
-目标岗位：{target_job or "未指定"}
-
-简历模块：
-{sections}
-
-严格按照《Methodology》执行分析，输出以下JSON结构：
-{{
-  "candidate_analysis": {{
-    "core_competency": "一句话总结该候选人的核心竞争力",
-    "risk_warnings": ["简历风险点/薄弱项1", "简历风险点/薄弱项2"]
-  }},
-  "resume_questions": [
-    {{"question": "基于项目细节的深挖题", "intent": "考察点", "strategy": "使用STAR法则的回答策略", "key_points": ["要点1", "要点2"]}}
-  ],
-  "technical_questions": [
-    {{"question": "岗位专业场景题", "intent": "考察点", "strategy": "回答策略", "key_points": ["要点1", "要点2"]}}
-  ],
-  "behavioral_questions": [
-    {{"question": "团队协作/抗压场景题", "intent": "考察点", "strategy": "回答策略", "key_points": ["要点1", "要点2"]}}
-  ],
-  "tips": ["全局面试建议1", "全局建议2", "全局建议3"]
-}}
-
-要求：
-- resume_questions 必须生成 5-8 个
-- technical_questions 必须生成 3-5 个  
-- behavioral_questions 必须生成 3-5 个"""
-
-    content = client.chat(
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        temperature=0.4,
-        max_tokens=4000,
-    )
-    return extract_json_object(content)
-
-
 def llm_resume_assistant(
     client: SiliconFlowClient,
     sections: Any,

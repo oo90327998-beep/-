@@ -7,10 +7,9 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.db.database import engine
-from app.db import init_db
 from app.api.resume_routes import router as resume_router
 from app.api.auth_routes import router as auth_router
+from app.api.interview_routes import router as interview_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,9 +21,8 @@ logger = logging.getLogger("resume-api")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db.init_db()
+    logger.info("Resume Optimizer API starting")
     yield
-    await engine.dispose()
 
 
 def create_app() -> FastAPI:
@@ -48,7 +46,7 @@ def create_app() -> FastAPI:
         start = time.time()
         response = await call_next(request)
         duration = time.time() - start
-        logger.info(f"{request.method} {request.url.path} → {response.status_code} ({duration:.2f}s)")
+        logger.info(f"{request.method} {request.url.path} -> {response.status_code} ({duration:.2f}s)")
         return response
 
     @app.exception_handler(Exception)
@@ -65,6 +63,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router, prefix="/api")
     app.include_router(resume_router, prefix="/api")
+    app.include_router(interview_router)
     return app
 
 

@@ -10,7 +10,7 @@ import type {
 } from "../types";
 
 const API_BASE = '/api';
-const DEFAULT_TIMEOUT = 190000;  // backend LLM timeout is 180s, add 10s buffer
+const DEFAULT_TIMEOUT = 360000;  // backend LLM can take 3 retries × 180s each
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const controller = new AbortController();
@@ -46,7 +46,7 @@ export async function ocrResume(file: File): Promise<OcrResponse> {
   form.append("file", file);
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error('OCR 处理超时，请稍后重试')), 190000);
+  const timeout = setTimeout(() => controller.abort(new Error('OCR 处理超时，请稍后重试')), 480000);
   try {
     const resp = await fetch(`${API_BASE}/ocr`, {
       method: "POST",
